@@ -64,6 +64,7 @@ export interface StoryMedia {
   isVideo: boolean;
   caption?: string;
   id: number;
+  date?: number;
 }
 
 const MAX_BYTES = 45 * 1024 * 1024; // Bot API upload cap is 50MB
@@ -80,7 +81,7 @@ async function toMedia(client: TelegramClient, story: Api.TypeStoryItem): Promis
   const buffer = (await client.downloadMedia(story.media)) as Buffer | undefined;
   if (!buffer?.length) throw new NotFoundError();
   if (buffer.length > MAX_BYTES) throw new Error("TOO_LARGE");
-  return { buffer, isVideo, caption: story.caption, id: story.id };
+  return { buffer, isVideo, caption: story.caption, id: story.id, date: story.date };
 }
 
 export async function fetchStory(username: string, id: number): Promise<StoryMedia> {

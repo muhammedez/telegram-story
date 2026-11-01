@@ -19,11 +19,33 @@ const NAME = /^@([A-Za-z0-9_]{5,32})$/;
 
 const CAPTION_MAX = 1024; // Bot API limit for media captions
 
+function formatPostedTime(unix: number): string {
+  const d = new Date(unix * 1000);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const yyyy = d.getUTCFullYear();
+  const mm = pad(d.getUTCMonth() + 1);
+  const dd = pad(d.getUTCDate());
+  const hh = pad(d.getUTCHours());
+  const min = pad(d.getUTCMinutes());
+  return `${yyyy}-${mm}-${dd} ${hh}:${min} UTC`;
+}
+
 function captionFor(m: StoryMedia): string | undefined {
-  if (!m.caption) return undefined;
-  const text = m.caption.trim();
-  if (!text) return undefined;
-  return text.length > CAPTION_MAX ? text.slice(0, CAPTION_MAX - 1) + "…" : text;
+  const timeText = m.date ? `🕒 Posted: ${formatPostedTime(m.date)}` : "";
+  const text = m.caption?.trim();
+
+  if (!text) {
+    return timeText || undefined;
+  }
+
+  if (!timeText) {
+    return text.length > CAPTION_MAX ? text.slice(0, CAPTION_MAX - 1) + "…" : text;
+  }
+
+  const suffix = `\n\n${timeText}`;
+  const maxTextLen = CAPTION_MAX - suffix.length;
+  const trimmedText = text.length > maxTextLen ? text.slice(0, maxTextLen - 1) + "…" : text;
+  return `${trimmedText}${suffix}`;
 }
 
 async function send(ctx: Context, m: StoryMedia) {
