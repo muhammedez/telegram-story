@@ -93,28 +93,53 @@ export async function fetchStory(username: string, id: number): Promise<StoryMed
   });
 }
 
-export async function fetchActive(username: string, limit?: number): Promise<StoryMedia[]> {
+export async function fetchActive(
+  username: string,
+  limit?: number,
+  activeOnly = false
+): Promise<StoryMedia[]> {
   return withClient(async (client) => {
     const peer = await client.getInputEntity(username);
-    const res = await client.invoke(new Api.stories.GetPeerStories({ peer }));
 
-    // GetPeerStories also returns stories that expired hours ago; keep only
-    // the ones still live, newest first.
+    // 1. Fetch live 24h stories
     const now = Math.floor(Date.now() / 1000);
-    let stories = res.stories.stories
+    const activeRes = await client.invoke(new Api.stories.GetPeerStories({ peer })).catch(() => null);
+    const activeStories = (activeRes?.stories?.stories ?? [])
       .filter((s): s is Api.StoryItem => s instanceof Api.StoryItem)
-      .filter((s) => s.expireDate > now)
-      .sort((a, b) => b.date - a.date);
+      .filter((s) => s.expireDate > now);
 
-    if (typeof limit === "number" && limit > 0) {
-      stories = stories.slice(0, limit);
-    } else {
-      stories = stories.slice(0, 20);
+    let allStories = [...activeStories];
+    const targetLimit = typeof limit === "number" && limit > 0 ? limit : 20;
+
+    // 2. If not activeOnly and we need more stories, fetch public profile/pinned stories
+    if (!activeOnly && allStories.length < targetLimit) {
+      const needed = targetLimit - allStories.length;
+      const pinnedRes = await client
+        .invoke(new Api.stories.GetPinnedStories({ peer, offsetId: 0, limit: Math.min(needed * 2, 50) }))
+        .catch(() => null);
+
+      if (pinnedRes?.stories?.length) {
+        const seenIds = new Set(allStories.map((s) => s.id));
+        for (const s of pinnedRes.stories) {
+          if (s instanceof Api.StoryItem && !seenIds.has(s.id)) {
+            allStories.push(s);
+            seenIds.add(s.id);
+          }
+        }
+      }
     }
+
+    // Sort newest first
+    allStories.sort((a, b) => b.date - a.date);
+    allStories = allStories.slice(0, targetLimit);
+
+    console.log(
+      `[MTPROTO] @${username} — active: ${activeStories.length}, total selected: ${allStories.length}, target: ${targetLimit}`
+    );
 
     const out: StoryMedia[] = [];
     let hadProtected = false;
-    for (const s of stories) {
+    for (const s of allStories) {
       try {
         out.push(await toMedia(client, s));
       } catch (e) {

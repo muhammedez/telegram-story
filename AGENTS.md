@@ -5,7 +5,7 @@ A Telegram bot. The user sends a story link (`https://t.me/<username>/s/<id>`) o
 
 ## Hard rules (never violate)
 1. NEVER call `stories.ReadStories`, `stories.IncrementStoryViews`, or `stories.ActivateStealthMode` anywhere in `src/` or `api/`.
-2. Only story calls allowed: `stories.GetStoriesByID`, `stories.GetPeerStories`, and `client.downloadMedia`.
+2. Only story calls allowed: `stories.GetStoriesByID`, `stories.GetPeerStories`, `stories.GetPinnedStories`, and `client.downloadMedia`.
 3. Refuse stories with `noforwards === true`.
 4. Never log or commit `SESSION`, `API_HASH`, `BOT_TOKEN`.
 5. Every MTProto use goes through `withClient()` (lock, connect, run, always disconnect).

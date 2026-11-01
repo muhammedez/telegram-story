@@ -80,23 +80,29 @@ bot.callbackQuery(/^dl:([A-Za-z0-9_]{5,32}):(all|1|3|5|10)$/, async (ctx) => {
 
   await ctx.answerCallbackQuery();
 
-  const limit = mode === "all" ? 20 : parseInt(mode, 10);
+  const isTodayOnly = mode === "all";
+  const limit = isTodayOnly ? 20 : parseInt(mode, 10);
   const label =
-    mode === "all"
+    isTodayOnly
       ? "today's active stories"
       : mode === "1"
         ? "the latest story"
         : `the last ${limit} stories`;
 
+  console.log(`[BOT] User clicked ${mode} (limit ${limit}) for @${username}`);
   await ctx.editMessageText(`⏳ Fetching ${label} for @${username}...`).catch(() => {});
 
   try {
-    const items = await fetchActive(username, limit);
+    const items = await fetchActive(username, limit, isTodayOnly);
     for (const m of items) {
       await send(ctx, m);
     }
+    const note =
+      !isTodayOnly && mode !== "1" && items.length < limit
+        ? ` (only ${items.length} public ${items.length === 1 ? "story is" : "stories are"} available)`
+        : "";
     await ctx.editMessageText(
-      `✅ Sent ${items.length} ${items.length === 1 ? "story" : "stories"} for @${username}.`
+      `✅ Sent ${items.length} ${items.length === 1 ? "story" : "stories"} for @${username}${note}.`
     ).catch(() => {});
   } catch (e: any) {
     let errMsg = "Failed to fetch stories.";
@@ -105,7 +111,9 @@ bot.callbackQuery(/^dl:([A-Za-z0-9_]{5,32}):(all|1|3|5|10)$/, async (ctx) => {
     } else if (e instanceof ProtectedError) {
       errMsg = "❌ Stories for this account are protected and can't be saved.";
     } else if (e instanceof NotFoundError) {
-      errMsg = `ℹ️ No active stories found for @${username} (or they expired/are private).`;
+      errMsg = isTodayOnly
+        ? `ℹ️ No active 24h stories found for @${username}. Try "Last 3" or "Last 10" for profile stories.`
+        : `ℹ️ No public stories found for @${username}.`;
     } else if (e instanceof BusyError) {
       errMsg = "⚠️ Server is busy right now, please try again in a few seconds.";
     } else if (e?.message === "TOO_LARGE") {
