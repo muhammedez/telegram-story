@@ -89,6 +89,67 @@ function captionFor(m: StoryMedia, lang: Lang): string | undefined {
   return `${trimmedText}${suffix}`;
 }
 
+async function sendWithRetry<T>(fn: () => Promise<T>, retries = 2): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      lastError = err;
+      const isNetwork =
+        err?.message?.includes("Network request") ||
+        err?.message?.includes("fetch failed") ||
+        err?.name === "HttpError";
+      if (isNetwork && attempt < retries) {
+        console.warn(`[BOT] Transient network failure on attempt ${attempt}, retrying in 500ms...`);
+        await new Promise((r) => setTimeout(r, 500));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastError;
+}
+
+async function sendSingleItem(ctx: Context, m: StoryMedia, asDoc: boolean, lang: Lang) {
+  const filename = m.isVideo ? `story-${m.id}.mp4` : `story-${m.id}.jpg`;
+  const caption = captionFor(m, lang);
+  const opts = caption ? { caption } : {};
+
+  if (asDoc) {
+    await sendWithRetry(() =>
+      ctx.replyWithDocument(new InputFile(m.buffer, filename), opts)
+    );
+    return;
+  }
+
+  if (m.isVideo) {
+    try {
+      await sendWithRetry(() =>
+        ctx.replyWithVideo(new InputFile(m.buffer, filename), opts)
+      );
+    } catch (err: any) {
+      console.warn("replyWithVideo failed, falling back to document:", err?.message);
+      await sendWithRetry(() =>
+        ctx.replyWithDocument(new InputFile(m.buffer, filename), opts)
+      );
+    }
+    return;
+  }
+
+  // Photo
+  try {
+    await sendWithRetry(() =>
+      ctx.replyWithPhoto(new InputFile(m.buffer, filename), opts)
+    );
+  } catch (err: any) {
+    console.warn("replyWithPhoto failed, falling back to document:", err?.message);
+    await sendWithRetry(() =>
+      ctx.replyWithDocument(new InputFile(m.buffer, filename), opts)
+    );
+  }
+}
+
 async function sendMediaGroupOrSingle(
   ctx: Context,
   items: StoryMedia[],
@@ -96,22 +157,7 @@ async function sendMediaGroupOrSingle(
   lang: Lang
 ) {
   if (items.length === 1) {
-    const m = items[0];
-    const filename = m.isVideo ? `story-${m.id}.mp4` : `story-${m.id}.jpg`;
-    const file = new InputFile(m.buffer, filename);
-    const caption = captionFor(m, lang);
-    const opts = caption ? { caption } : {};
-
-    if (asDoc) {
-      await ctx.replyWithChatAction("upload_document").catch(() => {});
-      await ctx.replyWithDocument(file, opts);
-    } else if (m.isVideo) {
-      await ctx.replyWithChatAction("upload_video").catch(() => {});
-      await ctx.replyWithVideo(file, opts);
-    } else {
-      await ctx.replyWithChatAction("upload_photo").catch(() => {});
-      await ctx.replyWithPhoto(file, opts);
-    }
+    await sendSingleItem(ctx, items[0], asDoc, lang);
     return;
   }
 
@@ -120,7 +166,6 @@ async function sendMediaGroupOrSingle(
     const batch = items.slice(i, i + 10);
 
     if (asDoc) {
-      await ctx.replyWithChatAction("upload_document").catch(() => {});
       const group = batch.map((m) =>
         InputMediaBuilder.document(
           new InputFile(m.buffer, m.isVideo ? `story-${m.id}.mp4` : `story-${m.id}.jpg`),
@@ -129,18 +174,14 @@ async function sendMediaGroupOrSingle(
       );
 
       try {
-        await ctx.replyWithMediaGroup(group);
+        await sendWithRetry(() => ctx.replyWithMediaGroup(group));
       } catch (e) {
         console.warn("Document media group failed, falling back to single sends:", e);
         for (const m of batch) {
-          const file = new InputFile(m.buffer, m.isVideo ? `story-${m.id}.mp4` : `story-${m.id}.jpg`);
-          await ctx.replyWithDocument(file, { caption: captionFor(m, lang) });
+          await sendSingleItem(ctx, m, true, lang);
         }
       }
     } else {
-      const hasVideo = batch.some((m) => m.isVideo);
-      await ctx.replyWithChatAction(hasVideo ? "upload_video" : "upload_photo").catch(() => {});
-
       const group = batch.map((m) => {
         const file = new InputFile(m.buffer, m.isVideo ? `story-${m.id}.mp4` : `story-${m.id}.jpg`);
         const caption = captionFor(m, lang);
@@ -150,14 +191,11 @@ async function sendMediaGroupOrSingle(
       });
 
       try {
-        await ctx.replyWithMediaGroup(group);
+        await sendWithRetry(() => ctx.replyWithMediaGroup(group));
       } catch (e) {
         console.warn("Media group failed, falling back to single sends:", e);
         for (const m of batch) {
-          const file = new InputFile(m.buffer, m.isVideo ? `story-${m.id}.mp4` : `story-${m.id}.jpg`);
-          const caption = captionFor(m, lang);
-          const opts = caption ? { caption } : {};
-          await (m.isVideo ? ctx.replyWithVideo(file, opts) : ctx.replyWithPhoto(file, opts));
+          await sendSingleItem(ctx, m, false, lang);
         }
       }
     }
