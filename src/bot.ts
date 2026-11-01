@@ -2,7 +2,7 @@ import { Bot, InputFile, InlineKeyboard, type Context } from "grammy";
 import { allow, floodTtl } from "./limits.js";
 import {
   fetchStory,
-  fetchActive,
+  fetchUserStories,
   BusyError,
   ProtectedError,
   NotFoundError,
@@ -10,16 +10,21 @@ import {
   type StoryMedia,
 } from "./mtproto.js";
 
-export const bot = new Bot(process.env.BOT_TOKEN!);
+if (!process.env.BOT_TOKEN) {
+  throw new Error("Missing BOT_TOKEN environment variable");
+}
+
+export const bot = new Bot(process.env.BOT_TOKEN);
 
 // t.me/user/s/123  |  t.me/user  |  @user
-const LINK = /(?:https?:\/\/)?t\.me\/([A-Za-z0-9_]{5,32})\/s\/(\d+)/i;
+const LINK = /(?:https?:\/\/)?t\.me\/([A-Za-z0-9_]{5,32})\/s\/(\d+)\/?/i;
 const PROFILE = /^(?:https?:\/\/)?t\.me\/([A-Za-z0-9_]{5,32})\/?$/i;
 const NAME = /^@([A-Za-z0-9_]{5,32})$/;
 
 const CAPTION_MAX = 1024; // Bot API limit for media captions
 
-function formatPostedTime(unix: number): string {
+function formatPostedTime(unix?: number): string {
+  if (!unix || !Number.isFinite(unix) || unix <= 0) return "";
   const d = new Date(unix * 1000);
   const pad = (n: number) => String(n).padStart(2, "0");
   const yyyy = d.getUTCFullYear();
@@ -31,7 +36,8 @@ function formatPostedTime(unix: number): string {
 }
 
 function captionFor(m: StoryMedia): string | undefined {
-  const timeText = m.date ? `🕒 Posted: ${formatPostedTime(m.date)}` : "";
+  const formattedTime = formatPostedTime(m.date);
+  const timeText = formattedTime ? `🕒 Posted: ${formattedTime}` : "";
   const text = m.caption?.trim();
 
   if (!text) {
@@ -66,6 +72,37 @@ function storyKeyboard(username: string): InlineKeyboard {
     .text("🔟 Last 10 Stories", `dl:${username}:10`)
     .row()
     .text("❌ Cancel", `dl:${username}:cancel`);
+}
+
+function formatErrorMessage(
+  e: unknown,
+  opts: { username?: string; isTodayOnly?: boolean } = {}
+): string {
+  const userRef = opts.username ? `@${opts.username}` : "that user";
+
+  if (e instanceof UnknownUserError) {
+    return `❌ Username ${userRef} does not exist.`;
+  }
+  if (e instanceof ProtectedError) {
+    return "❌ Stories for this account are protected and can't be saved.";
+  }
+  if (e instanceof NotFoundError) {
+    return opts.isTodayOnly
+      ? `ℹ️ No active 24h stories found for ${userRef}. Try "Last 3" or "Last 10" for profile stories.`
+      : `ℹ️ No public stories found for ${userRef}.`;
+  }
+  if (e instanceof BusyError) {
+    return "⚠️ Server is busy right now, please try again in a few seconds.";
+  }
+  if ((e as Error)?.message === "TOO_LARGE") {
+    return "⚠️ Story is too large to send (>45MB).";
+  }
+  if (typeof (e as { seconds?: number })?.seconds === "number") {
+    return `⚠️ Rate limited by Telegram, retry in ${(e as { seconds: number }).seconds}s.`;
+  }
+
+  console.error("fetch failed:", (e as Error)?.message ?? e);
+  return "❌ Failed to fetch stories.";
 }
 
 bot.command(["start", "help"], (ctx) =>
@@ -115,7 +152,7 @@ bot.callbackQuery(/^dl:([A-Za-z0-9_]{5,32}):(all|1|3|5|10)$/, async (ctx) => {
   await ctx.editMessageText(`⏳ Fetching ${label} for @${username}...`).catch(() => {});
 
   try {
-    const items = await fetchActive(username, limit, isTodayOnly);
+    const items = await fetchUserStories(username, limit, isTodayOnly);
     for (const m of items) {
       await send(ctx, m);
     }
@@ -126,25 +163,8 @@ bot.callbackQuery(/^dl:([A-Za-z0-9_]{5,32}):(all|1|3|5|10)$/, async (ctx) => {
     await ctx.editMessageText(
       `✅ Sent ${items.length} ${items.length === 1 ? "story" : "stories"} for @${username}${note}.`
     ).catch(() => {});
-  } catch (e: any) {
-    let errMsg = "Failed to fetch stories.";
-    if (e instanceof UnknownUserError) {
-      errMsg = `❌ Username @${username} does not exist.`;
-    } else if (e instanceof ProtectedError) {
-      errMsg = "❌ Stories for this account are protected and can't be saved.";
-    } else if (e instanceof NotFoundError) {
-      errMsg = isTodayOnly
-        ? `ℹ️ No active 24h stories found for @${username}. Try "Last 3" or "Last 10" for profile stories.`
-        : `ℹ️ No public stories found for @${username}.`;
-    } else if (e instanceof BusyError) {
-      errMsg = "⚠️ Server is busy right now, please try again in a few seconds.";
-    } else if (e?.message === "TOO_LARGE") {
-      errMsg = "⚠️ Story is too large to send (>45MB).";
-    } else if (typeof e?.seconds === "number") {
-      errMsg = `⚠️ Rate limited by Telegram, retry in ${e.seconds}s.`;
-    } else {
-      console.error("fetch failed:", e?.message);
-    }
+  } catch (e: unknown) {
+    const errMsg = formatErrorMessage(e, { username, isTodayOnly });
     await ctx.editMessageText(errMsg).catch(() => ctx.reply(errMsg));
   }
 });
@@ -173,16 +193,8 @@ bot.on("message:text", async (ctx) => {
       const item = await fetchStory(username, storyId);
       await send(ctx, item);
       await ctx.api.deleteMessage(ctx.chat.id, statusMsg.message_id).catch(() => {});
-    } catch (e: any) {
-      let errMsg = "Failed to fetch that story.";
-      if (e instanceof UnknownUserError) errMsg = "That username doesn't exist.";
-      else if (e instanceof ProtectedError) errMsg = "That story is protected and can't be saved.";
-      else if (e instanceof NotFoundError) errMsg = "Story not found, expired, or not visible.";
-      else if (e instanceof BusyError) errMsg = "Busy right now, try again in a few seconds.";
-      else if (e?.message === "TOO_LARGE") errMsg = "Story is too large to send.";
-      else if (typeof e?.seconds === "number") errMsg = `Rate limited by Telegram, retry in ${e.seconds}s.`;
-      else console.error("fetch failed:", e?.message);
-
+    } catch (e: unknown) {
+      const errMsg = formatErrorMessage(e, { username });
       await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, errMsg).catch(() => ctx.reply(errMsg));
     }
     return;

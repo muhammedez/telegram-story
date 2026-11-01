@@ -16,18 +16,22 @@ const iso = (unix: number) => new Date(unix * 1000).toISOString().replace(".000Z
 async function main() {
   return withClient(async (client) => {
     const peer = await client.getInputEntity(username);
-    // stories.GetPeerStories only reads; it does not register a view.
-    const res = await client.invoke(new Api.stories.GetPeerStories({ peer }));
+    // stories.GetPeerStories and GetPinnedStories only read; they do not register a view.
+    const res = await client.invoke(new Api.stories.GetPeerStories({ peer })).catch(() => null);
+    const activeItems = (res?.stories?.stories ?? []).filter((s): s is Api.StoryItem => s instanceof Api.StoryItem);
 
-    const items = res.stories.stories.filter((s) => s instanceof Api.StoryItem);
-    if (!items.length) {
-      console.log(`No active stories on @${username} visible to this account.`);
-      console.log("Either none are live (24h), or privacy is contacts/close-friends only.");
+    const pinnedRes = await client
+      .invoke(new Api.stories.GetPinnedStories({ peer, offsetId: 0, limit: 50 }))
+      .catch(() => null);
+    const pinnedItems = (pinnedRes?.stories ?? []).filter((s): s is Api.StoryItem => s instanceof Api.StoryItem);
+
+    if (!activeItems.length && !pinnedItems.length) {
+      console.log(`No active or public profile stories on @${username} visible to this account.`);
+      console.log("Either none are posted, or privacy is contacts/close-friends only.");
       return;
     }
 
-    console.log(`@${username}: ${items.length} active story item(s)\n`);
-    for (const s of items as Api.StoryItem[]) {
+    const printStory = (s: Api.StoryItem) => {
       const kind =
         s.media instanceof Api.MessageMediaPhoto
           ? "photo"
@@ -35,6 +39,7 @@ async function main() {
             ? (s.media.document as Api.Document)?.mimeType ?? "document"
             : "other";
       const flags = [
+        s.pinned ? "pinned" : null,
         s.noforwards ? "noforwards" : null,
         s.public ? "public" : null,
         s.closeFriends ? "close-friends" : null,
@@ -45,8 +50,21 @@ async function main() {
           (flags.length ? `  [${flags.join(",")}]` : "") +
           (s.caption ? `\n    "${s.caption}"` : "")
       );
+    };
+
+    if (activeItems.length) {
+      console.log(`@${username}: ${activeItems.length} active (24h) story item(s)\n`);
+      for (const s of activeItems) printStory(s);
+      console.log("");
     }
-    console.log(`\nTry: npm run fetch -- ${username} <id>`);
+
+    if (pinnedItems.length) {
+      console.log(`@${username}: ${pinnedItems.length} public profile/pinned story item(s)\n`);
+      for (const s of pinnedItems) printStory(s);
+      console.log("");
+    }
+
+    console.log(`Try: npm run fetch -- ${username} <id>`);
   });
 }
 

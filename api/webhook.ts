@@ -9,7 +9,17 @@ export async function POST(request: Request): Promise<Response> {
   if (request.headers.get("x-telegram-bot-api-secret-token") !== process.env.WEBHOOK_SECRET) {
     return new Response("forbidden", { status: 403 });
   }
-  const update = (await request.json()) as Update;
+
+  let update: Update;
+  try {
+    update = (await request.json()) as Update;
+  } catch {
+    return new Response("bad request", { status: 400 });
+  }
+
+  if (!update || typeof update.update_id !== "number") {
+    return new Response("bad request", { status: 400 });
+  }
 
   ready ??= bot.init();
   await ready;

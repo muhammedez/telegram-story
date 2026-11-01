@@ -94,7 +94,7 @@ export async function fetchStory(username: string, id: number): Promise<StoryMed
   });
 }
 
-export async function fetchActive(
+export async function fetchUserStories(
   username: string,
   limit?: number,
   activeOnly = false
@@ -159,3 +159,6 @@ export async function fetchActive(
     return out;
   });
 }
+
+/** Backwards-compatible alias for fetchUserStories */
+export const fetchActive = fetchUserStories;
