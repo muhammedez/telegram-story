@@ -1,0 +1,42 @@
+{
+  "name": "telegram-story",
+  "version": "1.0.0",
+  "description": "Telegram story downloader bot (MTProto userbot, anonymous views)",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "session": "node --env-file=.env.local --import tsx scripts/session.ts",
+    "webhook": "node --env-file=.env.local --import tsx scripts/set-webhook.ts",
+    "check:anon": "bash scripts/check-anon.sh",
+    "typecheck": "tsc --noEmit",
+    "check:limits": "node --env-file=.env.local --import tsx scripts/check-limits.ts",
+    "dev": "node --env-file=.env.local --import tsx scripts/dev.ts",
+    "fetch": "node --env-file=.env.local --import tsx scripts/check-fetch.ts",
+    "list": "node --env-file=.env.local --import tsx scripts/list-stories.ts",
+    "webhook:info": "node --env-file=.env.local --import tsx scripts/webhook-info.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/muhammedez/telegram-story.git"
+  },
+  "keywords": [],
+  "bugs": {
+    "url": "https://github.com/muhammedez/telegram-story/issues"
+  },
+  "homepage": "https://github.com/muhammedez/telegram-story#readme",
+  "dependencies": {
+    "@upstash/redis": "^1.40.0",
+    "@vercel/functions": "^3.10.4",
+    "grammy": "^1.46.0",
+    "telegram": "^2.26.22"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vercel": "^65.7.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
