@@ -9,7 +9,6 @@ export const messages = {
       "• Last 10 stories\n" +
       "and more!\n\n" +
       "Or send a single story link: t.me/user/s/123",
-    recent_header: "⭐ Recent Accounts:",
     choose_stories: (user: string) => `📖 Stories for @${user}\nChoose what you want to download:`,
     btn_active: "📅 Today's Active Stories",
     btn_latest: "1️⃣ Latest Story",
@@ -58,7 +57,6 @@ export const messages = {
       "• آخر 10 ستوريات\n" +
       "والمزيد!\n\n" +
       "أو أرسل رابط ستوري مباشر: t.me/user/s/123",
-    recent_header: "⭐ الحسابات الأخيرة:",
     choose_stories: (user: string) => `📖 ستوريات @${user}\nاختر ما تريد تحميله:`,
     btn_active: "📅 ستوريات اليوم النشطة",
     btn_latest: "1️⃣ آخر ستوري",

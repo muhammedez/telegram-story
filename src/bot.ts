@@ -6,8 +6,6 @@ import {
   toggleUserLang,
   getUserDocMode,
   toggleUserDocMode,
-  getRecents,
-  addRecent,
 } from "./limits.js";
 import {
   fetchStory,
@@ -253,21 +251,7 @@ function formatErrorMessage(
 bot.command(["start", "help"], async (ctx) => {
   if (!ctx.from) return;
   const lang = await getUserLang(ctx.from.id, ctx.from.language_code);
-  const t = messages[lang];
-  const recents = await getRecents(ctx.from.id);
-
-  let replyMarkup: InlineKeyboard | undefined;
-  let text = t.welcome;
-
-  if (recents.length > 0) {
-    text += `\n\n${t.recent_header}`;
-    replyMarkup = new InlineKeyboard();
-    for (const u of recents) {
-      replyMarkup.text(`👤 @${u}`, `open:${u}`);
-    }
-  }
-
-  await ctx.reply(text, replyMarkup ? { reply_markup: replyMarkup } : {});
+  await ctx.reply(messages[lang].welcome);
 });
 
 bot.command(["lang", "language"], async (ctx) => {
@@ -275,18 +259,6 @@ bot.command(["lang", "language"], async (ctx) => {
   const currentLang = await getUserLang(ctx.from.id, ctx.from.language_code);
   const nextLang = await toggleUserLang(ctx.from.id, currentLang);
   await ctx.reply(messages[nextLang].lang_changed);
-});
-
-bot.callbackQuery(/^open:([A-Za-z0-9_]{5,32})$/, async (ctx) => {
-  if (!ctx.from) return;
-  await ctx.answerCallbackQuery();
-  const username = ctx.match[1];
-  const lang = await getUserLang(ctx.from.id, ctx.from.language_code);
-  const asDoc = await getUserDocMode(ctx.from.id);
-
-  await ctx.reply(messages[lang].choose_stories(username), {
-    reply_markup: storyKeyboard(username, lang, asDoc),
-  });
 });
 
 bot.callbackQuery(/^toggle_mode:([A-Za-z0-9_]{5,32})$/, async (ctx) => {
@@ -363,8 +335,6 @@ bot.callbackQuery(/^dl:([A-Za-z0-9_]{5,32}):(all|1|3|5|10)$/, async (ctx) => {
 
   try {
     const items = await fetchUserStories(username, limit, isTodayOnly);
-    await addRecent(ctx.from.id, username);
-
     await sendMediaGroupOrSingle(ctx, items, asDoc, lang);
 
     const note =
@@ -405,7 +375,6 @@ bot.on("message:text", async (ctx) => {
 
     try {
       const item = await fetchStory(username, storyId);
-      await addRecent(ctx.from.id, username);
       await sendMediaGroupOrSingle(ctx, [item], asDoc, lang);
       await ctx.api.deleteMessage(ctx.chat.id, statusMsg.message_id).catch(() => {});
     } catch (e: unknown) {
@@ -415,9 +384,8 @@ bot.on("message:text", async (ctx) => {
     return;
   }
 
-  // Username or profile: save to recents and present interactive buttons
+  // Username or profile: present interactive buttons
   const username = (profile?.[1] ?? name![1]).replace(/^@/, "");
-  await addRecent(ctx.from.id, username);
 
   await ctx.reply(t.choose_stories(username), {
     reply_markup: storyKeyboard(username, lang, asDoc),

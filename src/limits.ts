@@ -55,27 +55,3 @@ export async function toggleUserDocMode(userId: number): Promise<boolean> {
   }
   return next;
 }
-
-/** get up to 3 recent accounts queried by user */
-export async function getRecents(userId: number): Promise<string[]> {
-  try {
-    const list = await redis.lrange(`recents:${userId}`, 0, 2);
-    return Array.isArray(list) ? list.filter((u): u is string => typeof u === "string") : [];
-  } catch {
-    return [];
-  }
-}
-
-/** store queried username in user's recents list */
-export async function addRecent(userId: number, username: string): Promise<void> {
-  try {
-    const clean = username.replace(/^@/, "").toLowerCase();
-    const key = `recents:${userId}`;
-    await redis.lrem(key, 0, clean);
-    await redis.lpush(key, clean);
-    await redis.ltrim(key, 0, 2);
-    await redis.expire(key, 86400 * 30);
-  } catch (e) {
-    console.warn("Failed to update recents:", e);
-  }
-}
