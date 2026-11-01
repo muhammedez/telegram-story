@@ -81,9 +81,14 @@ async function toMedia(
   if (story.noforwards) throw new ProtectedError();
   if (!story.media) throw new NotFoundError();
 
+  const doc =
+    story.media instanceof Api.MessageMediaDocument
+      ? (story.media.document as Api.Document)
+      : null;
   const isVideo =
-    story.media instanceof Api.MessageMediaDocument &&
-    (story.media.document as Api.Document)?.mimeType?.startsWith("video/") === true;
+    doc != null &&
+    (doc.mimeType?.startsWith("video/") === true ||
+      doc.attributes?.some((a) => a.className === "DocumentAttributeVideo") === true);
 
   const buffer = (await client.downloadMedia(story.media)) as Buffer | undefined;
   if (!buffer?.length) throw new NotFoundError();

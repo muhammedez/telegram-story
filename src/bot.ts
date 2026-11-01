@@ -1,4 +1,11 @@
-import { Bot, InputFile, InlineKeyboard, InputMediaBuilder, type Context } from "grammy";
+import {
+  Bot,
+  InputFile,
+  InlineKeyboard,
+  InputMediaBuilder,
+  InlineQueryResultBuilder,
+  type Context,
+} from "grammy";
 import {
   allow,
   floodTtl,
@@ -124,10 +131,13 @@ async function sendSingleItem(ctx: Context, m: StoryMedia, asDoc: boolean, lang:
   if (m.isVideo) {
     try {
       await sendWithRetry(() =>
-        ctx.replyWithVideo(new InputFile(m.buffer, filename), opts)
+        ctx.replyWithVideo(new InputFile(m.buffer, filename), {
+          ...opts,
+          supports_streaming: true,
+        })
       );
     } catch (err: any) {
-      console.warn("replyWithVideo failed, falling back to document:", err?.message);
+      console.warn(`[BOT] replyWithVideo failed (${err?.message}), falling back to document`);
       await sendWithRetry(() =>
         ctx.replyWithDocument(new InputFile(m.buffer, filename), opts)
       );
@@ -141,7 +151,7 @@ async function sendSingleItem(ctx: Context, m: StoryMedia, asDoc: boolean, lang:
       ctx.replyWithPhoto(new InputFile(m.buffer, filename), opts)
     );
   } catch (err: any) {
-    console.warn("replyWithPhoto failed, falling back to document:", err?.message);
+    console.warn(`[BOT] replyWithPhoto failed (${err?.message}), falling back to document`);
     await sendWithRetry(() =>
       ctx.replyWithDocument(new InputFile(m.buffer, filename), opts)
     );
@@ -184,7 +194,7 @@ async function sendMediaGroupOrSingle(
         const file = new InputFile(m.buffer, m.isVideo ? `story-${m.id}.mp4` : `story-${m.id}.jpg`);
         const caption = captionFor(m, lang);
         return m.isVideo
-          ? InputMediaBuilder.video(file, { caption })
+          ? InputMediaBuilder.video(file, { caption, supports_streaming: true })
           : InputMediaBuilder.photo(file, { caption });
       });
 
@@ -251,7 +261,49 @@ function formatErrorMessage(
 bot.command(["start", "help"], async (ctx) => {
   if (!ctx.from) return;
   const lang = await getUserLang(ctx.from.id, ctx.from.language_code);
-  await ctx.reply(messages[lang].welcome);
+  const asDoc = await getUserDocMode(ctx.from.id);
+  const t = messages[lang];
+
+  const payload = ctx.match?.trim();
+  if (!payload) {
+    await ctx.reply(t.welcome);
+    return;
+  }
+
+  // Deep link: username_s_123 -> fetch that specific story
+  const storyMatch = payload.match(/^([A-Za-z0-9_]{5,32})_s_(\d+)$/i);
+  if (storyMatch) {
+    const username = storyMatch[1];
+    const storyId = Number(storyMatch[2]);
+    if (!(await allow(ctx.from.id))) return ctx.reply(t.slow_down);
+    const wait = await floodTtl();
+    if (wait) return ctx.reply(t.busy(wait));
+
+    await ctx.replyWithChatAction("typing").catch(() => {});
+    const statusMsg = await ctx.reply(t.fetching_single(storyId, username));
+
+    try {
+      const item = await fetchStory(username, storyId);
+      await sendMediaGroupOrSingle(ctx, [item], asDoc, lang);
+      await ctx.api.deleteMessage(ctx.chat.id, statusMsg.message_id).catch(() => {});
+    } catch (e: unknown) {
+      const errMsg = formatErrorMessage(e, lang, { username });
+      await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, errMsg).catch(() => ctx.reply(errMsg));
+    }
+    return;
+  }
+
+  // Deep link: username -> present interactive buttons
+  const userMatch = payload.match(/^([A-Za-z0-9_]{5,32})$/i);
+  if (userMatch) {
+    const username = userMatch[1];
+    await ctx.reply(t.choose_stories(username), {
+      reply_markup: storyKeyboard(username, lang, asDoc),
+    });
+    return;
+  }
+
+  await ctx.reply(t.welcome);
 });
 
 bot.command(["lang", "language"], async (ctx) => {
@@ -390,4 +442,86 @@ bot.on("message:text", async (ctx) => {
   await ctx.reply(t.choose_stories(username), {
     reply_markup: storyKeyboard(username, lang, asDoc),
   });
+});
+
+bot.on("inline_query", async (ctx) => {
+  const rawQuery = ctx.inlineQuery.query.trim();
+  const lang = await getUserLang(ctx.from.id, ctx.from.language_code);
+  const t = messages[lang];
+  const botUsername = ctx.me.username;
+
+  if (!rawQuery) {
+    await ctx.answerInlineQuery(
+      [
+        InlineQueryResultBuilder.article(
+          "help",
+          t.inline_help_title,
+          {
+            description: t.inline_help_desc,
+          }
+        ).text(t.inline_help_text(botUsername), { parse_mode: "Markdown" }),
+      ],
+      { cache_time: 10 }
+    );
+    return;
+  }
+
+  const linkMatch = rawQuery.match(LINK);
+  const profileMatch = rawQuery.match(PROFILE);
+  const nameMatch = rawQuery.match(NAME);
+  const username = (
+    linkMatch
+      ? linkMatch[1]
+      : profileMatch
+        ? profileMatch[1]
+        : nameMatch
+          ? nameMatch[1]
+          : rawQuery.replace(/^@/, "")
+  ).trim();
+
+  if (!/^[A-Za-z0-9_]{5,32}$/.test(username)) {
+    await ctx.answerInlineQuery([], { cache_time: 10 });
+    return;
+  }
+
+  const results = [];
+
+  // Direct story link: include single story option
+  if (linkMatch) {
+    const storyId = linkMatch[2];
+    const storyKb = new InlineKeyboard()
+      .url(t.inline_btn_open, `https://t.me/${botUsername}?start=${username}_s_${storyId}`)
+      .switchInlineCurrent(t.inline_btn_search, "");
+
+    results.push(
+      InlineQueryResultBuilder.article(
+        `story_${username}_${storyId}`,
+        `Story #${storyId} for @${username}`,
+        {
+          description: `Tap to send download link for story #${storyId}`,
+          reply_markup: storyKb,
+        }
+      ).text(`📖 *Story #${storyId} for @${username}*\nTap below to download anonymously:`, {
+        parse_mode: "Markdown",
+      })
+    );
+  }
+
+  // Account stories option
+  const kb = new InlineKeyboard()
+    .url(t.inline_btn_open, `https://t.me/${botUsername}?start=${username}`)
+    .switchInlineCurrent(t.inline_btn_search, "");
+
+  results.push(
+    InlineQueryResultBuilder.article(
+      `stories_${username}`,
+      t.inline_story_title(username),
+      {
+        description: t.inline_story_desc,
+        reply_markup: kb,
+      }
+    ).text(t.inline_story_text(username), { parse_mode: "Markdown" })
+  );
+
+  await ctx.answerInlineQuery(results, { cache_time: 30 });
 });

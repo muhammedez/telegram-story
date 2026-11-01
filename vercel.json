@@ -1,6 +1,6 @@
 {
   "functions": {
-    "api/webhook.ts": { "maxDuration": 60 }
+    "api/**": { "maxDuration": 60 }
   },
   "rewrites": [
     { "source": "/privacy", "destination": "/api/privacy" }

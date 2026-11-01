@@ -1,7 +1,8 @@
-import { waitUntil } from "@vercel/functions";
 import type { Update } from "grammy/types";
 import { bot } from "../src/bot.js";
 import { isDuplicate } from "../src/limits.js";
+
+export const maxDuration = 60;
 
 let ready: Promise<void> | null = null;
 
@@ -26,9 +27,12 @@ export async function POST(request: Request): Promise<Response> {
 
   if (await isDuplicate(update.update_id)) return new Response("ok");
 
-  waitUntil(
-    bot.handleUpdate(update).catch((e) => console.error("update failed:", e?.message))
-  );
+  try {
+    await bot.handleUpdate(update);
+  } catch (e: any) {
+    console.error("update failed:", e?.message);
+  }
+
   return new Response("ok");
 }
 

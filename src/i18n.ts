@@ -48,6 +48,16 @@ export const messages = {
     label_active: "today's active stories",
     label_latest: "the latest story",
     label_last_n: (n: number) => `the last ${n} stories`,
+    inline_help_title: "Type a username or link",
+    inline_help_desc: "Example: @Tsttorybot username",
+    inline_help_text: (bot: string) =>
+      `To download stories anonymously, type:\n\`@${bot} username\``,
+    inline_story_title: (user: string) => `Stories for @${user}`,
+    inline_story_desc: "Tap to share download link for stories",
+    inline_story_text: (user: string) =>
+      `📖 *Stories for @${user}*\nTap below to download active or profile stories anonymously:`,
+    inline_btn_open: "📥 Download Stories",
+    inline_btn_search: "🔍 Search Another User",
   },
   ar: {
     welcome:
@@ -95,5 +105,15 @@ export const messages = {
     label_active: "ستوريات اليوم النشطة",
     label_latest: "آخر ستوري",
     label_last_n: (n: number) => `آخر ${n} ستوريات`,
+    inline_help_title: "اكتب اسم مستخدم أو رابط",
+    inline_help_desc: "مثال: @Tsttorybot username",
+    inline_help_text: (bot: string) =>
+      `لتحميل الستوريات بدون أثر، اكتب:\n\`@${bot} username\``,
+    inline_story_title: (user: string) => `ستوريات @${user}`,
+    inline_story_desc: "اضغط لمشاركة خيارات تحميل الستوريات",
+    inline_story_text: (user: string) =>
+      `📖 *ستوريات @${user}*\nاضغط بالأسفل لتحميل الستوريات النشطة أو المحفوظة بدون أثر:`,
+    inline_btn_open: "📥 تحميل الستوريات",
+    inline_btn_search: "🔍 بحث عن حساب آخر",
   },
 };
