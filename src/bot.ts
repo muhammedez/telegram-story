@@ -1,5 +1,14 @@
-import { Bot, InputFile, InlineKeyboard, type Context } from "grammy";
-import { allow, floodTtl } from "./limits.js";
+import { Bot, InputFile, InlineKeyboard, InputMediaBuilder, type Context } from "grammy";
+import {
+  allow,
+  floodTtl,
+  getUserLang,
+  toggleUserLang,
+  getUserDocMode,
+  toggleUserDocMode,
+  getRecents,
+  addRecent,
+} from "./limits.js";
 import {
   fetchStory,
   fetchUserStories,
@@ -9,6 +18,7 @@ import {
   UnknownUserError,
   type StoryMedia,
 } from "./mtproto.js";
+import { messages, type Lang } from "./i18n.js";
 
 if (!process.env.BOT_TOKEN) {
   throw new Error("Missing BOT_TOKEN environment variable");
@@ -35,89 +45,247 @@ function formatPostedTime(unix?: number): string {
   return `${yyyy}-${mm}-${dd} ${hh}:${min} UTC`;
 }
 
-function captionFor(m: StoryMedia): string | undefined {
-  const formattedTime = formatPostedTime(m.date);
-  const timeText = formattedTime ? `🕒 Posted: ${formattedTime}` : "";
+function captionFor(m: StoryMedia, lang: Lang): string | undefined {
+  const t = messages[lang];
+  const metaLines: string[] = [];
+
+  const posted = formatPostedTime(m.date);
+  if (posted) {
+    metaLines.push(`${t.posted} ${posted}`);
+  }
+
+  if (m.expireDate) {
+    const now = Math.floor(Date.now() / 1000);
+    const diff = m.expireDate - now;
+    if (diff > 0) {
+      const h = Math.floor(diff / 3600);
+      const min = Math.floor((diff % 3600) / 60);
+      metaLines.push(t.expires_in(h, min));
+    } else {
+      metaLines.push(t.profile_story);
+    }
+  } else if (m.pinned) {
+    metaLines.push(t.profile_story);
+  }
+
+  if (m.username && m.id) {
+    metaLines.push(`${t.direct_link} https://t.me/${m.username}/s/${m.id}`);
+  }
+
+  const metaText = metaLines.join("\n");
   const text = m.caption?.trim();
 
   if (!text) {
-    return timeText || undefined;
+    return metaText || undefined;
   }
 
-  if (!timeText) {
+  if (!metaText) {
     return text.length > CAPTION_MAX ? text.slice(0, CAPTION_MAX - 1) + "…" : text;
   }
 
-  const suffix = `\n\n${timeText}`;
+  const suffix = `\n\n${metaText}`;
   const maxTextLen = CAPTION_MAX - suffix.length;
   const trimmedText = text.length > maxTextLen ? text.slice(0, maxTextLen - 1) + "…" : text;
   return `${trimmedText}${suffix}`;
 }
 
-async function send(ctx: Context, m: StoryMedia) {
-  const file = new InputFile(m.buffer, m.isVideo ? "story.mp4" : "story.jpg");
-  const caption = captionFor(m);
-  const opts = caption ? { caption } : {};
-  await (m.isVideo ? ctx.replyWithVideo(file, opts) : ctx.replyWithPhoto(file, opts));
+async function sendMediaGroupOrSingle(
+  ctx: Context,
+  items: StoryMedia[],
+  asDoc: boolean,
+  lang: Lang
+) {
+  if (items.length === 1) {
+    const m = items[0];
+    const filename = m.isVideo ? `story-${m.id}.mp4` : `story-${m.id}.jpg`;
+    const file = new InputFile(m.buffer, filename);
+    const caption = captionFor(m, lang);
+    const opts = caption ? { caption } : {};
+
+    if (asDoc) {
+      await ctx.replyWithChatAction("upload_document").catch(() => {});
+      await ctx.replyWithDocument(file, opts);
+    } else if (m.isVideo) {
+      await ctx.replyWithChatAction("upload_video").catch(() => {});
+      await ctx.replyWithVideo(file, opts);
+    } else {
+      await ctx.replyWithChatAction("upload_photo").catch(() => {});
+      await ctx.replyWithPhoto(file, opts);
+    }
+    return;
+  }
+
+  // Telegram limits media groups to max 10 items
+  for (let i = 0; i < items.length; i += 10) {
+    const batch = items.slice(i, i + 10);
+
+    if (asDoc) {
+      await ctx.replyWithChatAction("upload_document").catch(() => {});
+      const group = batch.map((m) =>
+        InputMediaBuilder.document(
+          new InputFile(m.buffer, m.isVideo ? `story-${m.id}.mp4` : `story-${m.id}.jpg`),
+          { caption: captionFor(m, lang) }
+        )
+      );
+
+      try {
+        await ctx.replyWithMediaGroup(group);
+      } catch (e) {
+        console.warn("Document media group failed, falling back to single sends:", e);
+        for (const m of batch) {
+          const file = new InputFile(m.buffer, m.isVideo ? `story-${m.id}.mp4` : `story-${m.id}.jpg`);
+          await ctx.replyWithDocument(file, { caption: captionFor(m, lang) });
+        }
+      }
+    } else {
+      const hasVideo = batch.some((m) => m.isVideo);
+      await ctx.replyWithChatAction(hasVideo ? "upload_video" : "upload_photo").catch(() => {});
+
+      const group = batch.map((m) => {
+        const file = new InputFile(m.buffer, m.isVideo ? `story-${m.id}.mp4` : `story-${m.id}.jpg`);
+        const caption = captionFor(m, lang);
+        return m.isVideo
+          ? InputMediaBuilder.video(file, { caption })
+          : InputMediaBuilder.photo(file, { caption });
+      });
+
+      try {
+        await ctx.replyWithMediaGroup(group);
+      } catch (e) {
+        console.warn("Media group failed, falling back to single sends:", e);
+        for (const m of batch) {
+          const file = new InputFile(m.buffer, m.isVideo ? `story-${m.id}.mp4` : `story-${m.id}.jpg`);
+          const caption = captionFor(m, lang);
+          const opts = caption ? { caption } : {};
+          await (m.isVideo ? ctx.replyWithVideo(file, opts) : ctx.replyWithPhoto(file, opts));
+        }
+      }
+    }
+  }
 }
 
-function storyKeyboard(username: string): InlineKeyboard {
+function storyKeyboard(username: string, lang: Lang, asDoc: boolean): InlineKeyboard {
+  const t = messages[lang];
   return new InlineKeyboard()
-    .text("📅 Today's Active Stories", `dl:${username}:all`)
+    .text(t.btn_active, `dl:${username}:all`)
     .row()
-    .text("1️⃣ Latest Story", `dl:${username}:1`)
-    .text("3️⃣ Last 3 Stories", `dl:${username}:3`)
+    .text(t.btn_latest, `dl:${username}:1`)
+    .text(t.btn_last3, `dl:${username}:3`)
     .row()
-    .text("5️⃣ Last 5 Stories", `dl:${username}:5`)
-    .text("🔟 Last 10 Stories", `dl:${username}:10`)
+    .text(t.btn_last5, `dl:${username}:5`)
+    .text(t.btn_last10, `dl:${username}:10`)
     .row()
-    .text("❌ Cancel", `dl:${username}:cancel`);
+    .text(asDoc ? t.btn_quality_doc : t.btn_quality_media, `toggle_mode:${username}`)
+    .text(t.btn_lang_switch, `toggle_lang:${username}`)
+    .row()
+    .text(t.btn_cancel, `dl:${username}:cancel`);
 }
 
 function formatErrorMessage(
   e: unknown,
+  lang: Lang,
   opts: { username?: string; isTodayOnly?: boolean } = {}
 ): string {
-  const userRef = opts.username ? `@${opts.username}` : "that user";
+  const t = messages[lang];
+  const user = opts.username ?? "user";
 
   if (e instanceof UnknownUserError) {
-    return `❌ Username ${userRef} does not exist.`;
+    return t.err_unknown(user);
   }
   if (e instanceof ProtectedError) {
-    return "❌ Stories for this account are protected and can't be saved.";
+    return t.err_protected;
   }
   if (e instanceof NotFoundError) {
-    return opts.isTodayOnly
-      ? `ℹ️ No active 24h stories found for ${userRef}. Try "Last 3" or "Last 10" for profile stories.`
-      : `ℹ️ No public stories found for ${userRef}.`;
+    return opts.isTodayOnly ? t.err_no_active(user) : t.err_not_found(user);
   }
   if (e instanceof BusyError) {
-    return "⚠️ Server is busy right now, please try again in a few seconds.";
+    return t.err_server_busy;
   }
   if ((e as Error)?.message === "TOO_LARGE") {
-    return "⚠️ Story is too large to send (>45MB).";
+    return t.err_too_large;
   }
   if (typeof (e as { seconds?: number })?.seconds === "number") {
-    return `⚠️ Rate limited by Telegram, retry in ${(e as { seconds: number }).seconds}s.`;
+    return t.err_rate_limited((e as { seconds: number }).seconds);
   }
 
   console.error("fetch failed:", (e as Error)?.message ?? e);
-  return "❌ Failed to fetch stories.";
+  return t.err_failed;
 }
 
-bot.command(["start", "help"], (ctx) =>
-  ctx.reply(
-    "👋 Send @username (or t.me/username) to choose how many stories to download:\n" +
-      "• Today's active stories\n" +
-      "• Last 3 stories\n" +
-      "• Last 10 stories\n" +
-      "and more!\n\n" +
-      "Or send a single story link: t.me/user/s/123"
-  )
-);
+bot.command(["start", "help"], async (ctx) => {
+  if (!ctx.from) return;
+  const lang = await getUserLang(ctx.from.id, ctx.from.language_code);
+  const t = messages[lang];
+  const recents = await getRecents(ctx.from.id);
+
+  let replyMarkup: InlineKeyboard | undefined;
+  let text = t.welcome;
+
+  if (recents.length > 0) {
+    text += `\n\n${t.recent_header}`;
+    replyMarkup = new InlineKeyboard();
+    for (const u of recents) {
+      replyMarkup.text(`👤 @${u}`, `open:${u}`);
+    }
+  }
+
+  await ctx.reply(text, replyMarkup ? { reply_markup: replyMarkup } : {});
+});
+
+bot.command(["lang", "language"], async (ctx) => {
+  if (!ctx.from) return;
+  const currentLang = await getUserLang(ctx.from.id, ctx.from.language_code);
+  const nextLang = await toggleUserLang(ctx.from.id, currentLang);
+  await ctx.reply(messages[nextLang].lang_changed);
+});
+
+bot.callbackQuery(/^open:([A-Za-z0-9_]{5,32})$/, async (ctx) => {
+  if (!ctx.from) return;
+  await ctx.answerCallbackQuery();
+  const username = ctx.match[1];
+  const lang = await getUserLang(ctx.from.id, ctx.from.language_code);
+  const asDoc = await getUserDocMode(ctx.from.id);
+
+  await ctx.reply(messages[lang].choose_stories(username), {
+    reply_markup: storyKeyboard(username, lang, asDoc),
+  });
+});
+
+bot.callbackQuery(/^toggle_mode:([A-Za-z0-9_]{5,32})$/, async (ctx) => {
+  if (!ctx.from) return;
+  const username = ctx.match[1];
+  const asDoc = await toggleUserDocMode(ctx.from.id);
+  const lang = await getUserLang(ctx.from.id, ctx.from.language_code);
+  const t = messages[lang];
+
+  await ctx.answerCallbackQuery({
+    text: asDoc ? t.mode_toggled_doc : t.mode_toggled_media,
+  });
+
+  await ctx.editMessageReplyMarkup({
+    reply_markup: storyKeyboard(username, lang, asDoc),
+  }).catch(() => {});
+});
+
+bot.callbackQuery(/^toggle_lang:([A-Za-z0-9_]{5,32})$/, async (ctx) => {
+  if (!ctx.from) return;
+  const username = ctx.match[1];
+  const currentLang = await getUserLang(ctx.from.id, ctx.from.language_code);
+  const nextLang = await toggleUserLang(ctx.from.id, currentLang);
+  const asDoc = await getUserDocMode(ctx.from.id);
+  const t = messages[nextLang];
+
+  await ctx.answerCallbackQuery({ text: t.lang_changed });
+
+  await ctx.editMessageText(t.choose_stories(username), {
+    reply_markup: storyKeyboard(username, nextLang, asDoc),
+  }).catch(() => {});
+});
 
 bot.callbackQuery(/^dl:([A-Za-z0-9_]{5,32}):cancel$/, async (ctx) => {
-  await ctx.answerCallbackQuery({ text: "Cancelled" });
+  if (!ctx.from) return;
+  const lang = await getUserLang(ctx.from.id, ctx.from.language_code);
+  await ctx.answerCallbackQuery({ text: messages[lang].cancelled });
   await ctx.deleteMessage().catch(() => {});
 });
 
@@ -126,84 +294,94 @@ bot.callbackQuery(/^dl:([A-Za-z0-9_]{5,32}):(all|1|3|5|10)$/, async (ctx) => {
 
   const username = ctx.match[1];
   const mode = ctx.match[2];
+  const lang = await getUserLang(ctx.from.id, ctx.from.language_code);
+  const asDoc = await getUserDocMode(ctx.from.id);
+  const t = messages[lang];
 
   if (!(await allow(ctx.from.id))) {
-    await ctx.answerCallbackQuery({ text: "Slow down: max 5 requests/minute.", show_alert: true });
+    await ctx.answerCallbackQuery({ text: t.slow_down, show_alert: true });
     return;
   }
   const wait = await floodTtl();
   if (wait) {
-    await ctx.answerCallbackQuery({ text: `Busy, try again in ${wait}s.`, show_alert: true });
+    await ctx.answerCallbackQuery({ text: t.busy(wait), show_alert: true });
     return;
   }
 
   await ctx.answerCallbackQuery();
+  await ctx.replyWithChatAction("typing").catch(() => {});
 
   const isTodayOnly = mode === "all";
   const limit = isTodayOnly ? 20 : parseInt(mode, 10);
   const label =
     isTodayOnly
-      ? "today's active stories"
+      ? t.label_active
       : mode === "1"
-        ? "the latest story"
-        : `the last ${limit} stories`;
+        ? t.label_latest
+        : t.label_last_n(limit);
 
   console.log(`[BOT] User clicked ${mode} (limit ${limit}) for @${username}`);
-  await ctx.editMessageText(`⏳ Fetching ${label} for @${username}...`).catch(() => {});
+  await ctx.editMessageText(t.fetching(label, username)).catch(() => {});
 
   try {
     const items = await fetchUserStories(username, limit, isTodayOnly);
-    for (const m of items) {
-      await send(ctx, m);
-    }
+    await addRecent(ctx.from.id, username);
+
+    await sendMediaGroupOrSingle(ctx, items, asDoc, lang);
+
     const note =
       !isTodayOnly && mode !== "1" && items.length < limit
-        ? ` (only ${items.length} public ${items.length === 1 ? "story is" : "stories are"} available)`
+        ? t.only_available(items.length)
         : "";
-    await ctx.editMessageText(
-      `✅ Sent ${items.length} ${items.length === 1 ? "story" : "stories"} for @${username}${note}.`
-    ).catch(() => {});
+    await ctx.editMessageText(t.sent_count(items.length, username, note)).catch(() => {});
   } catch (e: unknown) {
-    const errMsg = formatErrorMessage(e, { username, isTodayOnly });
+    const errMsg = formatErrorMessage(e, lang, { username, isTodayOnly });
     await ctx.editMessageText(errMsg).catch(() => ctx.reply(errMsg));
   }
 });
 
 bot.on("message:text", async (ctx) => {
   if (!ctx.from) return; // channel posts / anonymous admins have no user to reply to
+  const lang = await getUserLang(ctx.from.id, ctx.from.language_code);
+  const asDoc = await getUserDocMode(ctx.from.id);
+  const t = messages[lang];
+
   const text = ctx.message.text.trim();
   const link = text.match(LINK);
   const profile = text.match(PROFILE);
   const name = text.match(NAME);
   if (!link && !profile && !name) {
-    return ctx.reply("Send @username or t.me/username, or t.me/user/s/123 for one story.");
+    return ctx.reply(t.prompt_usage);
   }
 
   // Direct story link: fetch that specific story directly
   if (link) {
-    if (!(await allow(ctx.from.id))) return ctx.reply("Slow down: max 5 requests/minute.");
+    if (!(await allow(ctx.from.id))) return ctx.reply(t.slow_down);
     const wait = await floodTtl();
-    if (wait) return ctx.reply(`Busy, try again in ${wait}s.`);
+    if (wait) return ctx.reply(t.busy(wait));
 
+    await ctx.replyWithChatAction("typing").catch(() => {});
     const username = link[1];
     const storyId = Number(link[2]);
-    const statusMsg = await ctx.reply(`⏳ Fetching story #${storyId} for @${username}...`);
+    const statusMsg = await ctx.reply(t.fetching_single(storyId, username));
 
     try {
       const item = await fetchStory(username, storyId);
-      await send(ctx, item);
+      await addRecent(ctx.from.id, username);
+      await sendMediaGroupOrSingle(ctx, [item], asDoc, lang);
       await ctx.api.deleteMessage(ctx.chat.id, statusMsg.message_id).catch(() => {});
     } catch (e: unknown) {
-      const errMsg = formatErrorMessage(e, { username });
+      const errMsg = formatErrorMessage(e, lang, { username });
       await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, errMsg).catch(() => ctx.reply(errMsg));
     }
     return;
   }
 
-  // Username or profile: present interactive button options
+  // Username or profile: save to recents and present interactive buttons
   const username = (profile?.[1] ?? name![1]).replace(/^@/, "");
+  await addRecent(ctx.from.id, username);
 
-  await ctx.reply(`📖 Stories for @${username}\nChoose what you want to download:`, {
-    reply_markup: storyKeyboard(username),
+  await ctx.reply(t.choose_stories(username), {
+    reply_markup: storyKeyboard(username, lang, asDoc),
   });
 });

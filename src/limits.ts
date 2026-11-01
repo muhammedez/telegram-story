@@ -1,4 +1,5 @@
 import { redis } from "./redis.js";
+import type { Lang } from "./i18n.js";
 
 /** true if this update_id was already processed */
 export async function isDuplicate(updateId: number): Promise<boolean> {
@@ -21,4 +22,60 @@ export async function setFlood(seconds: number) {
 
 export async function floodTtl(): Promise<number> {
   return Math.max(await redis.ttl("flood"), 0);
+}
+
+/** get user language with fallback to Telegram language_code */
+export async function getUserLang(userId: number, telegramLangCode?: string): Promise<Lang> {
+  const saved = (await redis.get(`lang:${userId}`)) as string | null;
+  if (saved === "ar" || saved === "en") return saved;
+  return telegramLangCode?.toLowerCase().startsWith("ar") ? "ar" : "en";
+}
+
+/** toggle user language between English and Arabic */
+export async function toggleUserLang(userId: number, current: Lang): Promise<Lang> {
+  const next: Lang = current === "ar" ? "en" : "ar";
+  await redis.set(`lang:${userId}`, next, { ex: 86400 * 365 });
+  return next;
+}
+
+/** get user preference: send media as document (uncompressed) */
+export async function getUserDocMode(userId: number): Promise<boolean> {
+  const mode = await redis.get(`mode:${userId}`);
+  return mode === "doc";
+}
+
+/** toggle user preference: document vs media */
+export async function toggleUserDocMode(userId: number): Promise<boolean> {
+  const current = await getUserDocMode(userId);
+  const next = !current;
+  if (next) {
+    await redis.set(`mode:${userId}`, "doc", { ex: 86400 * 365 });
+  } else {
+    await redis.del(`mode:${userId}`);
+  }
+  return next;
+}
+
+/** get up to 3 recent accounts queried by user */
+export async function getRecents(userId: number): Promise<string[]> {
+  try {
+    const list = await redis.lrange(`recents:${userId}`, 0, 2);
+    return Array.isArray(list) ? list.filter((u): u is string => typeof u === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/** store queried username in user's recents list */
+export async function addRecent(userId: number, username: string): Promise<void> {
+  try {
+    const clean = username.replace(/^@/, "").toLowerCase();
+    const key = `recents:${userId}`;
+    await redis.lrem(key, 0, clean);
+    await redis.lpush(key, clean);
+    await redis.ltrim(key, 0, 2);
+    await redis.expire(key, 86400 * 30);
+  } catch (e) {
+    console.warn("Failed to update recents:", e);
+  }
 }

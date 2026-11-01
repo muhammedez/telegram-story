@@ -65,11 +65,18 @@ export interface StoryMedia {
   caption?: string;
   id: number;
   date?: number;
+  expireDate?: number;
+  username: string;
+  pinned?: boolean;
 }
 
 const MAX_BYTES = 45 * 1024 * 1024; // Bot API upload cap is 50MB
 
-async function toMedia(client: TelegramClient, story: Api.TypeStoryItem): Promise<StoryMedia> {
+async function toMedia(
+  client: TelegramClient,
+  story: Api.TypeStoryItem,
+  username: string
+): Promise<StoryMedia> {
   if (!(story instanceof Api.StoryItem)) throw new NotFoundError();
   if (story.noforwards) throw new ProtectedError();
   if (!story.media) throw new NotFoundError();
@@ -81,7 +88,16 @@ async function toMedia(client: TelegramClient, story: Api.TypeStoryItem): Promis
   const buffer = (await client.downloadMedia(story.media)) as Buffer | undefined;
   if (!buffer?.length) throw new NotFoundError();
   if (buffer.length > MAX_BYTES) throw new Error("TOO_LARGE");
-  return { buffer, isVideo, caption: story.caption, id: story.id, date: story.date };
+  return {
+    buffer,
+    isVideo,
+    caption: story.caption,
+    id: story.id,
+    date: story.date,
+    expireDate: story.expireDate,
+    username,
+    pinned: story.pinned,
+  };
 }
 
 export async function fetchStory(username: string, id: number): Promise<StoryMedia> {
@@ -90,7 +106,7 @@ export async function fetchStory(username: string, id: number): Promise<StoryMed
     const res = await client.invoke(new Api.stories.GetStoriesByID({ peer, id: [id] }));
     const story = res.stories[0];
     if (!story) throw new NotFoundError();
-    return toMedia(client, story);
+    return toMedia(client, story, username);
   });
 }
 
@@ -142,7 +158,7 @@ export async function fetchUserStories(
     let hadProtected = false;
     for (const s of allStories) {
       try {
-        out.push(await toMedia(client, s));
+        out.push(await toMedia(client, s, username));
       } catch (e) {
         if (e instanceof ProtectedError) {
           hadProtected = true;
