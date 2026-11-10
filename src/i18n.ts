@@ -32,7 +32,6 @@ export const messages = {
     slow_down: "Slow down: max 5 requests/minute.",
     busy: (s: number) => `Busy, try again in ${s}s.`,
     err_unknown: (user: string) => `❌ Username @${user} does not exist.`,
-    err_protected: "❌ Stories for this account are protected and can't be saved.",
     err_no_active: (user: string) =>
       `ℹ️ No active 24h stories found for @${user}. Try "Last 3" or "Last 10" for profile stories.`,
     err_not_found: (user: string) => `ℹ️ No public stories found for @${user}.`,
@@ -89,7 +88,6 @@ export const messages = {
     slow_down: "مهلاً: الحد الأقصى 5 طلبات في الدقيقة.",
     busy: (s: number) => `مشغول، حاول مجدداً بعد ${s} ثانية.`,
     err_unknown: (user: string) => `❌ اسم المستخدم @${user} غير موجود.`,
-    err_protected: "❌ ستوريات هذا الحساب محمية ولا يمكن حفظها.",
     err_no_active: (user: string) =>
       `ℹ️ لا توجد ستوريات نشطة خلال 24 ساعة لـ @${user}. جرب "آخر 3" أو "آخر 10" لستوريات الملف الشخصي.`,
     err_not_found: (user: string) => `ℹ️ لم يتم العثور على ستوريات عامة لـ @${user}.`,

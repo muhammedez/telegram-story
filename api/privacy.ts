@@ -71,7 +71,7 @@ export function GET(): Response {
     <h2>2. Anonymity & Story Viewing</h2>
     <ul>
       <li><strong>Zero View Registration:</strong> The bot accesses public stories via MTProto without registering story views. Story creators will never see your account or identity in their viewer list.</li>
-      <li><strong>Protected Stories:</strong> Stories with forward or save restrictions (<code>noforwards</code>) are strictly respected and will not be fetched or served.</li>
+      <li><strong>Story Visibility:</strong> Only stories that the fetching account is allowed to view are processed. Stories limited to contacts or close friends stay inaccessible.</li>
     </ul>
 
     <h2>3. Data Collection & Storage</h2>

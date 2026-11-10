@@ -5,7 +5,6 @@ import { redis } from "./redis.js";
 import { setFlood } from "./limits.js";
 
 export class BusyError extends Error {}
-export class ProtectedError extends Error {}
 export class NotFoundError extends Error {}
 export class UnknownUserError extends Error {}
 
@@ -23,7 +22,7 @@ const NOT_FOUND_CODES = new Set([
 const UNKNOWN_USER_CODES = new Set(["USERNAME_NOT_OCCUPIED", "USERNAME_INVALID"]);
 
 function toAppError(e: any): unknown {
-  if (e instanceof BusyError || e instanceof ProtectedError || e instanceof NotFoundError) return e;
+  if (e instanceof BusyError || e instanceof NotFoundError) return e;
   const code = typeof e?.errorMessage === "string" ? e.errorMessage : "";
   if (NOT_FOUND_CODES.has(code)) return new NotFoundError();
   if (UNKNOWN_USER_CODES.has(code)) return new UnknownUserError();
@@ -78,7 +77,8 @@ async function toMedia(
   username: string
 ): Promise<StoryMedia> {
   if (!(story instanceof Api.StoryItem)) throw new NotFoundError();
-  if (story.noforwards) throw new ProtectedError();
+  // Note: story.noforwards only restricts forwarding/saving inside Telegram
+  // clients; the media itself is still downloadable over MTProto.
   if (!story.media) throw new NotFoundError();
 
   const doc =
@@ -160,23 +160,15 @@ export async function fetchUserStories(
     );
 
     const out: StoryMedia[] = [];
-    let hadProtected = false;
     for (const s of allStories) {
       try {
         out.push(await toMedia(client, s, username));
       } catch (e) {
-        if (e instanceof ProtectedError) {
-          hadProtected = true;
-          continue;
-        }
         if (e instanceof NotFoundError) continue;
         throw e;
       }
     }
-    if (!out.length) {
-      if (hadProtected) throw new ProtectedError();
-      throw new NotFoundError();
-    }
+    if (!out.length) throw new NotFoundError();
     return out;
   });
 }

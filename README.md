@@ -64,6 +64,8 @@ endpoint.
 
 - Only `stories.GetStoriesByID`, `stories.GetPeerStories` and
   `client.downloadMedia` may touch stories.
-- Stories with `noforwards` are refused.
+- The `noforwards` flag doesn't block downloads: media is still served when the
+  fetching account is allowed to see the story. Stories that are truly
+  invisible (contacts/close-friends only) simply aren't returned.
 - No runtime disk writes (media stays in memory); keep an eye on the 45 MB cap.
 - On `FLOOD_WAIT` set the global cooldown; never retry in a loop.

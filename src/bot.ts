@@ -18,7 +18,6 @@ import {
   fetchStory,
   fetchUserStories,
   BusyError,
-  ProtectedError,
   NotFoundError,
   UnknownUserError,
   type StoryMedia,
@@ -237,9 +236,6 @@ function formatErrorMessage(
 
   if (e instanceof UnknownUserError) {
     return t.err_unknown(user);
-  }
-  if (e instanceof ProtectedError) {
-    return t.err_protected;
   }
   if (e instanceof NotFoundError) {
     return opts.isTodayOnly ? t.err_no_active(user) : t.err_not_found(user);
